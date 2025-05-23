@@ -1,12 +1,11 @@
 import argparse
 
-
 def main():
     print("若要使用图形界面，请直接运行gui_interface.py，或在命令行中运行如下命令：python main.py --gui")
     parser = argparse.ArgumentParser(description='中药图片分类系统')
     parser.add_argument('--data_dir', type=str, default='中药数据集', help='数据集目录路径')
     parser.add_argument('--model_type', type=str, default='Model1',
-                        choices=['Model1', 'Model2', 'Model3'], help='模型类型')
+                        choices=['Model1', 'Model2', 'Model3', 'MediumCNN', 'EnhancedCNN'], help='模型类型')
     parser.add_argument('--lr', type=float, default=0.001, help='学习率')
     parser.add_argument('--epochs', type=int, default=10, help='训练轮次')
     parser.add_argument('--batch_size', type=int, default=32, help='批次大小')
@@ -28,7 +27,7 @@ def main():
         import torch
         import torch.nn as nn
         import torch.optim as optim
-        from cnn_model import CNNModel1, CNNModel2, CNNModel3
+        from cnn_model import CNNModel1, CNNModel2, CNNModel3, MediumCNN, EnhancedCNN
         from data_loader import get_data_loaders
         from train_evaluate import train_model, evaluate_model, plot_roc_curve, TrainingSignal
         import matplotlib.pyplot as plt
@@ -37,12 +36,14 @@ def main():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"使用设备: {device}")
 
+        img_size = args.img_size
+
         # 加载数据
         print("加载数据集...")
         train_loader, val_loader, test_loader, class_names = get_data_loaders(
             args.data_dir,
             batch_size=args.batch_size,
-            img_size=args.img_size,
+            img_size=img_size,
             augment=not args.no_augment
         )
         print(f"数据集加载完成! 类别数: {len(class_names)}")
@@ -50,11 +51,15 @@ def main():
         # 初始化模型
         print(f"初始化 {args.model_type} 模型...")
         if args.model_type == "Model1":
-            model = CNNModel1(len(class_names))
+            model = CNNModel1(len(class_names), img_size=img_size)
         elif args.model_type == "Model2":
-            model = CNNModel2(len(class_names))
+            model = CNNModel2(len(class_names), img_size=img_size)
         elif args.model_type == "Model3":
-            model = CNNModel3(len(class_names))
+            model = CNNModel3(len(class_names), img_size=img_size)
+        elif args.model_type == "MediumCNN":
+            model = MediumCNN(len(class_names), img_size=img_size)
+        elif args.model_type == "EnhancedCNN":
+            model = EnhancedCNN(len(class_names), img_size=img_size)
 
         model = model.to(device)
 
@@ -72,8 +77,12 @@ def main():
 
         signal.update_progress.connect(update_progress)
         signal.update_log.connect(show_log)
-
-        model, history = train_model(model, train_loader, val_loader, criterion, optimizer, args.epochs, device, signal)
+        try:
+            model, history = train_model(model, train_loader, val_loader, criterion, optimizer, args.epochs, device, signal)
+        except:
+            # 检查输出和标签的批次大小是否一致
+            print(f"警告: 输出批次大小与标签批次大小不匹配")
+            return
 
         # 评估模型
         print("评估模型...")

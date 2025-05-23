@@ -14,14 +14,16 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import numpy as np
-from cnn_model import CNNModel1, CNNModel2, CNNModel3
+from cnn_model import CNNModel1, CNNModel2, CNNModel3,MediumCNN,EnhancedCNN
 from data_loader import get_data_loaders
 from train_evaluate import train_model, evaluate_model, plot_roc_curve, TrainingSignal
 import matplotlib.font_manager as fm
 
 # 设置中文字体
 plt.rcParams["font.family"] = ["SimHei", "WenQuanYi Micro Hei", "Heiti TC", "Arial Unicode MS"]
-
+batch_size=32
+img_size=224
+lr=0.0001
 class TrainingThread(QThread):
     update_progress = pyqtSignal(int, str)
     training_complete = pyqtSignal(object, object)
@@ -121,8 +123,8 @@ class MainWindow(QMainWindow):
         dataset_layout.addWidget(browse_btn)
 
         self.img_size_spin = QSpinBox()
-        self.img_size_spin.setRange(128, 512)
-        self.img_size_spin.setValue(224)
+        self.img_size_spin.setRange(64, 512)
+        self.img_size_spin.setValue(img_size)
         self.img_size_spin.setSuffix(" 像素")
         img_size_layout = QHBoxLayout()
         img_size_layout.addWidget(QLabel("图像大小:"))
@@ -131,7 +133,7 @@ class MainWindow(QMainWindow):
 
         self.batch_size_spin = QSpinBox()
         self.batch_size_spin.setRange(4, 128)
-        self.batch_size_spin.setValue(32)
+        self.batch_size_spin.setValue(batch_size)
         self.batch_size_spin.setSuffix(" 样本")
         batch_size_layout = QHBoxLayout()
         batch_size_layout.addWidget(QLabel("批次大小:"))
@@ -157,13 +159,13 @@ class MainWindow(QMainWindow):
         model_layout = QVBoxLayout()
 
         self.model_combobox = QComboBox()
-        self.model_combobox.addItems(["Model1", "Model2", "Model3"])
+        self.model_combobox.addItems(["MediumCNN","EnhancedCNN","Model1", "Model2", "Model3"])
         model_layout.addWidget(QLabel("选择模型架构:"))
         model_layout.addWidget(self.model_combobox)
 
         self.lr_spin = QDoubleSpinBox()
         self.lr_spin.setRange(0.0001, 0.1)
-        self.lr_spin.setValue(0.001)
+        self.lr_spin.setValue(lr)
         self.lr_spin.setSingleStep(0.0001)
         self.lr_spin.setDecimals(4)
         lr_layout = QHBoxLayout()
@@ -297,7 +299,6 @@ class MainWindow(QMainWindow):
         try:
             self.dataset_status.setText("状态: 加载中...")
             QApplication.processEvents()
-
             img_size = self.img_size_spin.value()
             batch_size = self.batch_size_spin.value()
             augment = self.augment_checkbox.isChecked()
@@ -332,11 +333,15 @@ class MainWindow(QMainWindow):
             num_classes = len(self.class_names)
 
             if model_type == "Model1":
-                self.model = CNNModel1(num_classes)
+                self.model = CNNModel1(num_classes,self.img_size_spin.value())
             elif model_type == "Model2":
-                self.model = CNNModel2(num_classes)
+                self.model = CNNModel2(num_classes,self.img_size_spin.value())
             elif model_type == "Model3":
-                self.model = CNNModel3(num_classes)
+                self.model = CNNModel3(num_classes,self.img_size_spin.value())
+            elif model_type == "MediumCNN":
+                self.model = MediumCNN(num_classes,self.img_size_spin.value())
+            elif model_type == "EnhancedCNN":
+                self.model = EnhancedCNN(num_classes,self.img_size_spin.value())
 
             self.model = self.model.to(self.device)
             self.model_status.setText(f"状态: {model_type} 初始化成功!")
@@ -394,11 +399,11 @@ class MainWindow(QMainWindow):
 
     def show_comparison_status(self):
         """显示比较分析状态"""
-        self.train_status.setText("状态: 正在比较分析两种模型")
+        self.train_status.setText("状态: 正在验证模型...")
 
     def resume_training_status(self):
         """恢复训练状态"""
-        self.train_status.setText(f"状态: 继续训练...")
+        self.train_status.setText(f"状态: 正在准备下一次训练...")
 
     def training_complete(self, model, history):
         self.model = model
@@ -488,13 +493,61 @@ class MainWindow(QMainWindow):
 
         self.metrics_text.setText(metrics_text)
 
+        # 彻底重置ROC画布
+        self.reset_canvas(self.roc_canvas)
+
         # 绘制ROC曲线
-        self.roc_canvas.axes.clear()
         fig = plot_roc_curve(roc_data, self.class_names)
-        self.roc_canvas.figure = fig
+
+        # 正确复制新Figure的内容到roc_canvas
+        self.copy_figure_contents(fig, self.roc_canvas)
+
+        # 调整布局并绘制
+        self.roc_canvas.fig.tight_layout()
         self.roc_canvas.draw()
 
         QMessageBox.information(self, "评估完成", "模型评估已完成!")
+
+    def reset_canvas(self, canvas):
+        """彻底重置画布，清除所有内容和状态"""
+        canvas.fig.clear()
+        canvas.axes = canvas.fig.add_subplot(111)
+        # 重置常用属性
+        canvas.axes.set_xlim([0.0, 1.0])
+        canvas.axes.set_ylim([0.0, 1.05])
+        canvas.axes.set_xlabel('假正例率')
+        canvas.axes.set_ylabel('真正例率')
+        canvas.axes.set_title('ROC曲线')
+        canvas.axes.legend(loc="lower right", fontsize=10)
+        canvas.axes.grid(True)
+
+    def copy_figure_contents(self, source_fig, target_canvas):
+        """将一个Figure的内容复制到另一个Canvas的Figure"""
+        # 清除目标画布
+        target_canvas.fig.clear()
+        target_canvas.axes = target_canvas.fig.add_subplot(111)
+
+        # 复制所有线条、文本和其他元素
+        for source_ax in source_fig.axes:
+            # 复制线条
+            for line in source_ax.lines:
+                x, y = line.get_xdata(), line.get_ydata()
+                label = line.get_label()
+                color = line.get_color()
+                linestyle = line.get_linestyle()
+                target_canvas.axes.plot(x, y, label=label, color=color, linestyle=linestyle)
+
+            # 复制文本（如标题、标签）
+            if source_ax.get_title():
+                target_canvas.axes.set_title(source_ax.get_title())
+            if source_ax.get_xlabel():
+                target_canvas.axes.set_xlabel(source_ax.get_xlabel())
+            if source_ax.get_ylabel():
+                target_canvas.axes.set_ylabel(source_ax.get_ylabel())
+
+            # 复制图例
+            if source_ax.get_legend():
+                target_canvas.axes.legend()
 
     def evaluation_error(self, error_msg):
         self.eval_status.setText(f"状态: 评估失败 - {error_msg}")

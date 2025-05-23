@@ -1,6 +1,4 @@
 import torch
-import torch.nn as nn
-import torch.optim as optim
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc
 from sklearn.preprocessing import label_binarize
 import numpy as np
@@ -51,6 +49,9 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
             message = f'Epoch {epoch + 1}/{epochs}, Batch {batch_idx + 1}/{len(train_loader)}'
             signal.update_progress.emit(progress, message)
 
+        # **新增：发送开始比较信号**
+        signal.start_comparison.emit()
+
         train_loss = running_loss / len(train_loader)
         train_acc = 100. * correct / total
         history['train_loss'].append(train_loss)
@@ -62,16 +63,12 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
         correct = 0
         total = 0
 
-        # **新增：发送开始比较信号**
-        signal.start_comparison.emit()
-
         with torch.no_grad():
             for inputs, labels in val_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
 
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
-
                 running_loss += loss.item()
                 _, predicted = outputs.max(1)
                 total += labels.size(0)
@@ -184,35 +181,41 @@ def evaluate_model(model, test_loader, device, num_classes):
 
 
 def plot_roc_curve(roc_data, class_names=None):
-    plt.figure(figsize=(10, 8))
+    # 创建一个包含两个子图的布局，第一个子图用于绘制ROC曲线，第二个子图用于显示图例
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12), gridspec_kw={'height_ratios': [4, 1]})
 
     if 'num_classes' in roc_data and roc_data['num_classes'] > 2:
         # 绘制多类别ROC曲线
-        plt.plot(roc_data['fpr']['micro'], roc_data['tpr']['micro'],
-                 label=f'micro-average ROC curve (area = {roc_data["roc_auc"]["micro"]:0.2f})',
+        ax1.plot(roc_data['fpr']['micro'], roc_data['tpr']['micro'],
+                 label=f'微平均ROC曲线 (area = {roc_data["roc_auc"]["micro"]:0.2f})',
                  color='deeppink', linestyle=':', linewidth=4)
 
-        plt.plot(roc_data['fpr']['macro'], roc_data['tpr']['macro'],
-                 label=f'macro-average ROC curve (area = {roc_data["roc_auc"]["macro"]:0.2f})',
+        ax1.plot(roc_data['fpr']['macro'], roc_data['tpr']['macro'],
+                 label=f'宏平均ROC曲线 (area = {roc_data["roc_auc"]["macro"]:0.2f})',
                  color='navy', linestyle=':', linewidth=4)
 
         for i in range(roc_data['num_classes']):
             label = class_names[i] if class_names and i < len(class_names) else f'Class {i}'
-            plt.plot(roc_data['fpr'][i], roc_data['tpr'][i], lw=2,
-                     label=f'ROC curve of class {label} (area = {roc_data["roc_auc"][i]:0.2f})')
+            ax1.plot(roc_data['fpr'][i], roc_data['tpr'][i], lw=2,
+                     label=f'{label}的ROC曲线 (area = {roc_data["roc_auc"][i]:0.2f})')
     else:
         # 绘制二分类ROC曲线
-        plt.plot(roc_data['fpr'], roc_data['tpr'], color='darkorange',
+        ax1.plot(roc_data['fpr'], roc_data['tpr'], color='darkorange',
                  lw=2, label=f'ROC curve (area = {roc_data["roc_auc"]:0.2f})')
-        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        ax1.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
 
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('Receiver operating characteristic example')
-    plt.legend(loc="lower right")
-    plt.grid()
+    ax1.set_xlim([0.0, 1.0])
+    ax1.set_ylim([0.0, 1.05])
+    ax1.set_xlabel('假正例率')
+    ax1.set_ylabel('真正例率')
+    ax1.set_title('Receiver operating characteristic example')
+    ax1.grid()
+
+    # 将图例移动到第二个子图
+    handles, labels = ax1.get_legend_handles_labels()
+    ax2.axis('off')  # 隐藏第二个子图的坐标轴
+    ax2.legend(handles, labels, loc='center', fontsize=1000)
+
     plt.tight_layout()
 
-    return plt.gcf()
+    return fig
