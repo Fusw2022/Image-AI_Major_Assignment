@@ -12,6 +12,8 @@ def main():
     parser.add_argument('--img_size', type=int, default=224, help='图像大小')
     parser.add_argument('--no_augment', action='store_true', help='不使用数据增强')
     parser.add_argument('--gui', action='store_true', help='启动图形界面')
+    parser.add_argument('--epsilon', type=float, default=0.01, help='FGSM 扰动强度')
+    parser.add_argument('--use_ssl', action='store_true', help='使用自监督学习')
 
     args = parser.parse_args()
 
@@ -78,7 +80,7 @@ def main():
         signal.update_progress.connect(update_progress)
         signal.update_log.connect(show_log)
         try:
-            model, history = train_model(model, train_loader, val_loader, criterion, optimizer, args.epochs, device, signal)
+            model, history = train_model(model, train_loader, val_loader, criterion, optimizer, args.epochs, device, signal, args.epsilon, args.use_ssl)
         except:
             # 检查输出和标签的批次大小是否一致
             print(f"警告: 输出批次大小与标签批次大小不匹配")

@@ -2,6 +2,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+def fgsm_attack(image, epsilon, data_grad):
+    # 收集数据梯度的符号
+    sign_data_grad = data_grad.sign()
+    # 通过调整输入图像的每个像素来创建扰动图像
+    perturbed_image = image + epsilon * sign_data_grad
+    # 使像素值保持在 [0, 1] 范围内
+    perturbed_image = torch.clamp(perturbed_image, 0, 1)
+    return perturbed_image
+
 class MediumCNN(nn.Module):
     """中等复杂度的CNN模型，包含批标准化和Dropout"""
 
@@ -50,49 +59,48 @@ class MediumCNN(nn.Module):
         return x
 
 class EnhancedCNN(nn.Module):
-    def __init__(self,num_classes, img_size=224):
+    """改进版的 MediumCNN，集成了抗过拟合策略"""
+    def __init__(self, num_classes, img_size=224, use_bn=True, dropout_rate=0.5):
         super(EnhancedCNN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
-        # 在这里添加一个新的卷积层、BatchNorm和相应的池化层
-        # 添加新的卷积层
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32) if use_bn else nn.Identity()
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(32) if use_bn else nn.Identity()
+        self.pool1 = nn.MaxPool2d(2, 2)
+        self.dropout1 = nn.Dropout2d(0.3)  # 增大空间 Dropout
+
         self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        # 添加 BatchNorm 层
-        self.bn3 = nn.BatchNorm2d(64)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.flatten = nn.Flatten()
-        # 修改全连接层以适应新的特征图尺寸
-        self.fc1 = nn.Linear(64 * (img_size//4) * (img_size//4), 128)
-        self.fc2 = nn.Linear(128, num_classes)
+        self.bn3 = nn.BatchNorm2d(64) if use_bn else nn.Identity()
+        self.conv4 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.bn4 = nn.BatchNorm2d(64) if use_bn else nn.Identity()
+        self.pool2 = nn.MaxPool2d(2, 2)
+        self.dropout2 = nn.Dropout2d(0.3)  # 增大空间 Dropout
+
+        # 使用全局平均池化替代全连接层，减少参数
+        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.dropout3 = nn.Dropout(dropout_rate)  # 全连接层前的 Dropout
+        self.fc = nn.Linear(64, num_classes)
         self.relu = nn.ReLU()
-    def forward(self, x):
-        # 实现包含新卷积层的前向传播
-        # 第一个卷积层及激活函数
-        x = self.conv1(x)
-        x = self.relu(x)
-        # 第一个池化层
-        x = self.pool(x)
-        # 第二个卷积层及激活函数
-        x = self.conv2(x)
-        x = self.relu(x)
-        # 第二个池化层
-        x = self.pool(x)
-        # 新增的卷积层、BatchNorm 层及激活函数
-        x = self.conv3(x)
-        x = self.bn3(x)
-        x = self.relu(x)
-        # 展平操作
-        x = self.flatten(x)
-        # 第一个全连接层及激活函数
-        x = self.fc1(x)
-        x = self.relu(x)
-        # 第二个全连接层
-        x = self.fc2(x)
+
+    def forward_conv(self, x):
+        x = self.relu(self.bn1(self.conv1(x)))
+        x = self.relu(self.bn2(self.conv2(x)))
+        x = self.pool1(x)
+        x = self.dropout1(x)
+
+        x = self.relu(self.bn3(self.conv3(x)))
+        x = self.relu(self.bn4(self.conv4(x)))
+        x = self.pool2(x)
+        x = self.dropout2(x)
         return x
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+    def forward(self, x):
+        x = self.forward_conv(x)
+        x = self.global_pool(x)
+        x = x.view(x.size(0), -1)
+        x = self.dropout3(x)
+        x = self.fc(x)
+        return x
 
 class CNNModel1(nn.Module):
     def __init__(self, num_classes,img_size):
@@ -113,7 +121,7 @@ class CNNModel1(nn.Module):
         x = self.fc2(x)
         return x
 
-class CNNModel2(nn.Module):
+class CNNModel2(nn.Module):#EnhancedCNN
     def __init__(self, num_classes,img_size):
         super(CNNModel2, self).__init__()
         self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
@@ -138,7 +146,7 @@ class CNNModel2(nn.Module):
         x = self.fc2(x)
         return x
 
-class CNNModel3(nn.Module):
+class CNNModel3(nn.Module):#VGGNet
     def __init__(self, num_classes,img_size):
         super(CNNModel3, self).__init__()
         self.features = nn.Sequential(

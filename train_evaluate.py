@@ -4,6 +4,7 @@ from sklearn.preprocessing import label_binarize
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from cnn_model import fgsm_attack
 
 # 定义一个信号类，用于传递训练进度和批次信息
 from PyQt5.QtCore import pyqtSignal, QObject
@@ -16,7 +17,8 @@ class TrainingSignal(QObject):
     end_comparison = pyqtSignal()  # 新增：结束比较信号
 
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, device, signal):
+def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, device, signal, epsilon=0.01,
+                use_ssl=True, max_norm=1.0):  # 新增 max_norm 参数用于梯度裁剪
     best_val_loss = float('inf')
     best_model = None
     history = {'train_loss': [], 'val_loss': [], 'train_acc': [], 'val_acc': []}
@@ -24,7 +26,6 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
     current_batch = 0
 
     for epoch in range(epochs):
-        # 训练阶段
         model.train()
         running_loss = 0.0
         correct = 0
@@ -33,10 +34,61 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, d
         for batch_idx, (inputs, labels) in enumerate(train_loader):
             inputs, labels = inputs.to(device), labels.to(device)
 
+            if use_ssl:
+                # 自监督学习：旋转预测任务
+                rotated_inputs = []
+                ssl_labels = []
+                for img in inputs:
+                    rotations = [0, 90, 180, 270]
+                    random_rotation = np.random.choice(rotations)
+                    rotated_img = torch.rot90(img, random_rotation // 90, [1, 2])
+                    rotated_inputs.append(rotated_img)
+                    ssl_labels.append(rotations.index(random_rotation))
+                rotated_inputs = torch.stack(rotated_inputs).to(device)
+                ssl_labels = torch.tensor(ssl_labels).to(device)
+
+                optimizer.zero_grad()
+                ssl_outputs = model(rotated_inputs)
+                ssl_loss = criterion(ssl_outputs, ssl_labels)
+                ssl_loss.backward()
+                # 梯度裁剪
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+                optimizer.step()
+
             optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
+
+            # 随机选择标准训练或对抗训练
+            if epsilon > 0 and np.random.random() < 0.5:  # 50%的概率使用对抗训练
+                # 对抗训练
+                inputs.requires_grad = True
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+
+                # 计算梯度
+                data_grad = torch.autograd.grad(loss, inputs,
+                                                retain_graph=False,
+                                                create_graph=False)[0]
+
+                # 生成对抗样本
+                perturbed_data = fgsm_attack(inputs, epsilon, data_grad)
+
+                # 计算对抗样本的损失
+                perturbed_outputs = model(perturbed_data)
+                perturbed_loss = criterion(perturbed_outputs, labels)
+
+                # 只对对抗样本的损失进行反向传播
+                optimizer.zero_grad()
+                perturbed_loss.backward()
+                # 梯度裁剪
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+            else:
+                # 标准训练
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                # 梯度裁剪
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
             optimizer.step()
 
             running_loss += loss.item()
