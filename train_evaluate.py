@@ -18,7 +18,7 @@ class TrainingSignal(QObject):
 
 
 def train_model(model, train_loader, val_loader, criterion, optimizer, epochs, device, signal, epsilon=0.01,
-                use_ssl=True, max_norm=1.0):  # 新增 max_norm 参数用于梯度裁剪
+                use_ssl=False, max_norm=1.0):  # 新增 max_norm 参数用于梯度裁剪
     best_val_loss = float('inf')
     best_model = None
     history = {'train_loss': [], 'val_loss': [], 'train_acc': [], 'val_acc': []}
