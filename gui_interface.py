@@ -1,29 +1,27 @@
-import sys
-import os
-import torch
-import torch.nn as nn
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-                             QPushButton, QLabel, QFileDialog, QComboBox, QSpinBox,
-                             QDoubleSpinBox, QTextEdit, QTabWidget, QGroupBox, QCheckBox,
-                             QProgressBar, QMessageBox, QSplitter, QListWidget)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QPixmap, QImage
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
-import numpy as np
-from cnn_model import CNNModel1, CNNModel2, CNNModel3,MediumCNN,EnhancedCNN
+from cnn_model import CNNModel1, CNNModel2, CNNModel3, MediumCNN, EnhancedCNN, RCNN
 from data_loader import get_data_loaders
 from train_evaluate import train_model, evaluate_model, plot_roc_curve, TrainingSignal
-import matplotlib.font_manager as fm
+import sys
+import os
+import numpy as np
+import torch
+import torch.nn as nn
+import matplotlib.pyplot as plt
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                            QGroupBox, QLabel, QPushButton, QFileDialog, QSpinBox,
+                            QDoubleSpinBox, QCheckBox, QProgressBar, QTextEdit,
+                            QListWidget, QComboBox, QTabWidget, QMessageBox, QSplitter)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 # 设置中文字体
 plt.rcParams["font.family"] = ["SimHei", "WenQuanYi Micro Hei", "Heiti TC", "Arial Unicode MS"]
-batch_size=32
-img_size=224
-lr=0.0001
+img_size = 224
+batch_size = 32
+lr = 0.001
+epochs = 10
+
 class TrainingThread(QThread):
     update_progress = pyqtSignal(int, str)
     training_complete = pyqtSignal(object, object)
@@ -46,16 +44,24 @@ class TrainingThread(QThread):
         self.signal.update_log.connect(self.update_log)
         self.signal.start_comparison.connect(self.start_comparison)  # 连接信号
         self.signal.end_comparison.connect(self.end_comparison)    # 连接信号
+        self._stop_flag = False
+
+    def stop(self):
+        self._stop_flag = True
+        self.wait()  # 等待线程停止
 
     def run(self):
         try:
             model, history = train_model(
                 self.model, self.train_loader, self.val_loader,
-                self.criterion, self.optimizer, self.epochs, self.device, self.signal
+                self.criterion, self.optimizer, self.epochs, self.device, self.signal,
+                stop_flag=lambda: self._stop_flag  # 传递停止检查函数
             )
-            self.training_complete.emit(model, history)
+            if not self._stop_flag:
+                self.training_complete.emit(model, history)
         except Exception as e:
             self.training_error.emit(str(e))
+
 
 class EvaluationThread(QThread):
     evaluation_complete = pyqtSignal(object, object, object, object)
@@ -77,12 +83,14 @@ class EvaluationThread(QThread):
         except Exception as e:
             self.evaluation_error.emit(str(e))
 
+
 class MplCanvas(FigureCanvas):
     def __init__(self, parent=None, width=5, height=4, dpi=100):
         self.fig = Figure(figsize=(width, height), dpi=dpi)
         self.axes = self.fig.add_subplot(111)
         super(MplCanvas, self).__init__(self.fig)
         self.fig.tight_layout()
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -99,10 +107,15 @@ class MainWindow(QMainWindow):
         self.metrics = None
         self.roc_data = None
         self.training_in_progress = False  # 新增标志，用于避免重复训练
+        self.training_thread = None
 
-        self.init_ui()
+        # 获取当前文件夹路径
+        current_dir = os.getcwd()
+        # 拼接默认数据集路径
+        default_dataset_path = os.path.join(current_dir, "中药数据集")
+        self.init_ui(default_dataset_path)
 
-    def init_ui(self):
+    def init_ui(self, default_dataset_path="未选择数据集路径"):  # 修改方法定义，添加参数
         # 创建主布局
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -115,15 +128,15 @@ class MainWindow(QMainWindow):
         dataset_group = QGroupBox("数据集设置")
         dataset_layout = QVBoxLayout()
 
-        self.dataset_path_label = QLabel("未选择数据集路径")
+        self.dataset_path_label = QLabel(default_dataset_path)  # 使用默认路径
         dataset_layout.addWidget(self.dataset_path_label)
-
+        self.dataset_path = default_dataset_path
         browse_btn = QPushButton("浏览数据集")
         browse_btn.clicked.connect(self.browse_dataset)
         dataset_layout.addWidget(browse_btn)
 
         self.img_size_spin = QSpinBox()
-        self.img_size_spin.setRange(64, 512)
+        self.img_size_spin.setRange(64, 800)
         self.img_size_spin.setValue(img_size)
         self.img_size_spin.setSuffix(" 像素")
         img_size_layout = QHBoxLayout()
@@ -132,7 +145,7 @@ class MainWindow(QMainWindow):
         dataset_layout.addLayout(img_size_layout)
 
         self.batch_size_spin = QSpinBox()
-        self.batch_size_spin.setRange(4, 128)
+        self.batch_size_spin.setRange(1, 1200)
         self.batch_size_spin.setValue(batch_size)
         self.batch_size_spin.setSuffix(" 样本")
         batch_size_layout = QHBoxLayout()
@@ -159,7 +172,8 @@ class MainWindow(QMainWindow):
         model_layout = QVBoxLayout()
 
         self.model_combobox = QComboBox()
-        self.model_combobox.addItems(["MediumCNN","EnhancedCNN","Model1", "Model2", "Model3"])
+        self.model_combobox.addItems(["RCNN（最准确）", "EnhancedCNN（CNN升级版，要求数据集像素为16的倍数）", "Model1（最简单的CNN，快速，要求数据集像素为4的倍数）",
+                                      "Model2（多了一层，要求数据集像素为8的倍数）", "Model3（引入VGG架构，要求数据集像素为8的倍数）", "MediumCNN"])
         model_layout.addWidget(QLabel("选择模型架构:"))
         model_layout.addWidget(self.model_combobox)
 
@@ -175,7 +189,7 @@ class MainWindow(QMainWindow):
 
         self.epochs_spin = QSpinBox()
         self.epochs_spin.setRange(1, 100)
-        self.epochs_spin.setValue(10)
+        self.epochs_spin.setValue(epochs)
         epochs_layout = QHBoxLayout()
         epochs_layout.addWidget(QLabel("训练轮次:"))
         epochs_layout.addWidget(self.epochs_spin)
@@ -206,9 +220,9 @@ class MainWindow(QMainWindow):
         self.train_log_text.setReadOnly(True)
         train_layout.addWidget(self.train_log_text)
 
-        train_btn = QPushButton("开始训练")
-        train_btn.clicked.connect(self.start_training)
-        train_layout.addWidget(train_btn)
+        self.train_btn = QPushButton("开始训练")
+        self.train_btn.clicked.connect(self.start_or_stop_training)
+        train_layout.addWidget(self.train_btn)
 
         train_group.setLayout(train_layout)
         control_panel.addWidget(train_group)
@@ -307,14 +321,15 @@ class MainWindow(QMainWindow):
                 self.dataset_path, batch_size=batch_size, img_size=img_size, augment=augment
             )
 
-            self.dataset_status.setText(f"状态: 加载成功! 类别数: {len(self.class_names)}, 训练样本: {len(self.train_loader.dataset)}, 验证样本: {len(self.val_loader.dataset)}, 测试样本: {len(self.test_loader.dataset)}")
+            self.dataset_status.setText(
+                f"状态: 加载成功! 类别数: {len(self.class_names)}, 训练样本: {len(self.train_loader.dataset)}, 验证样本: {len(self.val_loader.dataset)}, 测试样本: {len(self.test_loader.dataset)}")
 
             # 更新样本列表
             self.sample_list.clear()
             for i in range(len(self.test_loader.dataset)):
                 img_path, true_label = self.test_loader.dataset.samples[i]
                 class_name = self.class_names[true_label]
-                self.sample_list.addItem(f"样本 {i+1}: {os.path.basename(img_path)} (真实类别: {class_name})")
+                self.sample_list.addItem(f"样本 {i + 1}: {os.path.basename(img_path)} (真实类别: {class_name})")
 
         except Exception as e:
             self.dataset_status.setText(f"状态: 加载失败 - {str(e)}")
@@ -332,66 +347,79 @@ class MainWindow(QMainWindow):
             model_type = self.model_combobox.currentText()
             num_classes = len(self.class_names)
 
-            if model_type == "Model1":
-                self.model = CNNModel1(num_classes,self.img_size_spin.value())
-            elif model_type == "Model2":
-                self.model = CNNModel2(num_classes,self.img_size_spin.value())
-            elif model_type == "Model3":
-                self.model = CNNModel3(num_classes,self.img_size_spin.value())
+            if model_type == "Model1（最简单的CNN，快速，要求数据集像素为4的倍数）":
+                self.model = CNNModel1(num_classes, self.img_size_spin.value())
+            elif model_type == "Model2（多了一层，要求数据集像素为8的倍数）":
+                self.model = CNNModel2(num_classes, self.img_size_spin.value())
+            elif model_type == "Model3（引入VGG架构，要求数据集像素为8的倍数）":
+                self.model = CNNModel3(num_classes, self.img_size_spin.value())
             elif model_type == "MediumCNN":
-                self.model = MediumCNN(num_classes,self.img_size_spin.value())
-            elif model_type == "EnhancedCNN":
-                self.model = EnhancedCNN(num_classes,self.img_size_spin.value())
+                self.model = MediumCNN(num_classes, self.img_size_spin.value())
+            elif model_type == "EnhancedCNN（CNN升级版，要求数据集像素为16的倍数）":
+                self.model = EnhancedCNN(num_classes, self.img_size_spin.value())
+            elif model_type == "RCNN（最准确）":
+                self.model = RCNN(num_classes, self.img_size_spin.value()).to(self.device)
 
             self.model = self.model.to(self.device)
-            self.model_status.setText(f"状态: {model_type} 初始化成功!")
+            self.model_status.setText(f"状态: {model_type.split('（')[0]} 初始化成功!")
 
         except Exception as e:
             self.model_status.setText(f"状态: 初始化失败 - {str(e)}")
             QMessageBox.critical(self, "错误", f"初始化模型时出错: {str(e)}")
 
-    def start_training(self):
-        if self.model is None:
-            QMessageBox.warning(self, "警告", "请先初始化模型!")
-            return
+    def start_or_stop_training(self):
+        if self.training_in_progress:
+            # 终止训练
+            if self.training_thread:
+                self.training_thread.stop()  # 调用 stop 方法
+                self.train_status.setText("状态: 训练已终止")
+                self.train_btn.setText("开始训练")
+                self.training_in_progress = False
+        else:
+            # 开始训练
+            if self.model is None:
+                QMessageBox.warning(self, "警告", "请先初始化模型!")
+                return
 
-        if self.train_loader is None or self.val_loader is None:
-            QMessageBox.warning(self, "警告", "请先加载数据集!")
-            return
+            if self.train_loader is None or self.val_loader is None:
+                QMessageBox.warning(self, "警告", "请先加载数据集!")
+                return
 
-        try:
-            lr = self.lr_spin.value()
-            epochs = self.epochs_spin.value()
+            try:
+                lr = self.lr_spin.value()
+                epochs = self.epochs_spin.value()
 
-            # 重置进度条
-            self.train_progress.setValue(0)
-            self.train_status.setText("状态: 准备训练...")
+                # 重置进度条
+                self.train_progress.setValue(0)
+                self.train_status.setText("状态: 准备训练...")
 
-            # 创建训练线程
-            criterion = nn.CrossEntropyLoss()
-            optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+                # 创建训练线程
+                criterion = nn.CrossEntropyLoss()
+                optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
 
-            self.training_thread = TrainingThread(
-                self.model, self.train_loader, self.val_loader,
-                criterion, optimizer, epochs, self.device
-            )
+                self.training_thread = TrainingThread(
+                    self.model, self.train_loader, self.val_loader,
+                    criterion, optimizer, epochs, self.device
+                )
 
-            # 连接信号
-            self.training_thread.update_progress.connect(self.update_training_progress)
-            self.training_thread.training_complete.connect(self.training_complete)
-            self.training_thread.training_error.connect(self.training_error)
-            # 新增：连接日志信号
-            self.training_thread.signal.update_log.connect(self.show_log)
-            # 连接新增信号
-            self.training_thread.start_comparison.connect(self.show_comparison_status)
-            self.training_thread.end_comparison.connect(self.resume_training_status)
+                # 连接信号
+                self.training_thread.update_progress.connect(self.update_training_progress)
+                self.training_thread.training_complete.connect(self.training_complete)
+                self.training_thread.training_error.connect(self.training_error)
+                # 新增：连接日志信号
+                self.training_thread.signal.update_log.connect(self.show_log)
+                # 连接新增信号
+                self.training_thread.start_comparison.connect(self.show_comparison_status)
+                self.training_thread.end_comparison.connect(self.resume_training_status)
 
-            # 启动线程
-            self.training_thread.start()
+                # 启动线程
+                self.training_thread.start()
+                self.train_btn.setText("终止训练")
+                self.training_in_progress = True
 
-        except Exception as e:
-            self.train_status.setText(f"状态: 训练失败 - {str(e)}")
-            QMessageBox.critical(self, "错误", f"开始训练时出错: {str(e)}")
+            except Exception as e:
+                self.train_status.setText(f"状态: 训练失败 - {str(e)}")
+                QMessageBox.critical(self, "错误", f"开始训练时出错: {str(e)}")
 
     def update_training_progress(self, progress, message):
         self.train_progress.setValue(progress)
@@ -410,6 +438,7 @@ class MainWindow(QMainWindow):
         self.train_status.setText("状态: 训练完成!")
         self.train_progress.setValue(100)
         self.training_in_progress = False  # 标记训练完成
+        self.train_btn.setText("开始训练")
 
         # 显示训练完成消息
         QMessageBox.information(self, "训练完成", "模型训练已完成!")
@@ -447,6 +476,7 @@ class MainWindow(QMainWindow):
         self.train_status.setText(f"状态: 训练失败 - {error_msg}")
         QMessageBox.critical(self, "训练错误", f"训练过程中出错: {error_msg}")
         self.training_in_progress = False  # 标记训练失败
+        self.train_btn.setText("开始训练")
 
     def update_epoch_info(self, epoch, epochs, train_loss, train_acc, val_loss, val_acc):
         # 输出训练结果信息到文本框
@@ -502,11 +532,40 @@ class MainWindow(QMainWindow):
         # 正确复制新Figure的内容到roc_canvas
         self.copy_figure_contents(fig, self.roc_canvas)
 
+        # 获取图例
+        legend = self.roc_canvas.axes.get_legend()
+        if legend is not None:
+            # 获取图例的边界框
+            legend_bbox = legend.get_window_extent().transformed(self.roc_canvas.fig.dpi_scale_trans.inverted())
+            legend_height = legend_bbox.height * self.roc_canvas.fig.dpi
+
+            # 获取当前画布的高度
+            current_height = self.roc_canvas.fig.get_figheight() * self.roc_canvas.fig.dpi
+
+            # 如果当前画布高度小于图例高度，调整画布高度
+            if current_height < legend_height*2:
+                new_height = legend_height / self.roc_canvas.fig.dpi*2
+                self.roc_canvas.fig.set_figheight(new_height)
+
         # 调整布局并绘制
         self.roc_canvas.fig.tight_layout()
         self.roc_canvas.draw()
 
         QMessageBox.information(self, "评估完成", "模型评估已完成!")
+
+    def set_fixed_aspect_ratio(self, canvas):
+        """设置画布保持固定的宽高比"""
+        # 获取当前父容器的尺寸
+        container = canvas.parent()
+        if container:
+            width = container.width()
+            height = container.height()
+
+            # 使用较小的尺寸作为基准，确保图表为正方形
+            size = min(width, height)
+
+            # 设置图表的尺寸
+            canvas.setFixedSize(size, size)
 
     def reset_canvas(self, canvas):
         """彻底重置画布，清除所有内容和状态"""
@@ -567,6 +626,9 @@ class MainWindow(QMainWindow):
             with torch.no_grad():
                 image_tensor = image.unsqueeze(0).to(self.device)
                 outputs = self.model(image_tensor)
+                if isinstance(outputs, tuple):
+                    # 如果是元组，假设第一个元素是分类输出
+                    outputs = outputs[0]
 
                 # 处理二分类和多分类的概率输出
                 num_classes = len(self.class_names)
@@ -627,11 +689,13 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", f"显示预测结果时出错: {str(e)}")
             print(f"错误详情: {e}")
 
+
 def main():
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
+
 
 if __name__ == "__main__":
     main()

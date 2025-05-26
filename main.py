@@ -4,8 +4,8 @@ def main():
     print("若要使用图形界面，请直接运行gui_interface.py，或在命令行中运行如下命令：python main.py --gui")
     parser = argparse.ArgumentParser(description='中药图片分类系统')
     parser.add_argument('--data_dir', type=str, default='中药数据集', help='数据集目录路径')
-    parser.add_argument('--model_type', type=str, default='Model1',
-                        choices=['Model1', 'Model2', 'Model3', 'MediumCNN', 'EnhancedCNN'], help='模型类型')
+    parser.add_argument('--model_type', type=str, default='RCNN',
+                        choices=['Model1', 'Model2', 'Model3', 'MediumCNN', 'EnhancedCNN','RCNN'], help='模型类型')
     parser.add_argument('--lr', type=float, default=0.001, help='学习率')
     parser.add_argument('--epochs', type=int, default=10, help='训练轮次')
     parser.add_argument('--batch_size', type=int, default=32, help='批次大小')
@@ -29,7 +29,7 @@ def main():
         import torch
         import torch.nn as nn
         import torch.optim as optim
-        from cnn_model import CNNModel1, CNNModel2, CNNModel3, MediumCNN, EnhancedCNN
+        from cnn_model import CNNModel1, CNNModel2, CNNModel3, MediumCNN, EnhancedCNN, RCNN
         from data_loader import get_data_loaders
         from train_evaluate import train_model, evaluate_model, plot_roc_curve, TrainingSignal
         import matplotlib.pyplot as plt
@@ -62,6 +62,8 @@ def main():
             model = MediumCNN(len(class_names), img_size=img_size)
         elif args.model_type == "EnhancedCNN":
             model = EnhancedCNN(len(class_names), img_size=img_size)
+        elif args.model_type == "RCNN":
+            model = RCNN(len(class_names), img_size=img_size)
 
         model = model.to(device)
 
@@ -81,9 +83,8 @@ def main():
         signal.update_log.connect(show_log)
         try:
             model, history = train_model(model, train_loader, val_loader, criterion, optimizer, args.epochs, device, signal, args.epsilon, args.use_ssl)
-        except:
-            # 检查输出和标签的批次大小是否一致
-            print(f"警告: 输出批次大小与标签批次大小不匹配")
+        except Exception as e:
+            print(str(e))
             return
 
         # 评估模型
@@ -97,6 +98,8 @@ def main():
         print(f"召回率: {metrics['recall']:.4f}")
         print(f"F1分数: {metrics['f1']:.4f}")
 
+        # 设置中文字体
+        plt.rcParams["font.family"] = ["SimHei", "WenQuanYi Micro Hei", "Heiti TC", "Arial Unicode MS"]
         # 绘制训练历史和ROC曲线
         plt.figure(figsize=(12, 5))
 
@@ -128,4 +131,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()    
+    main()
